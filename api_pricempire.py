@@ -1,25 +1,25 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
-import pandas as pd
 from datetime import datetime
 import re
 import time
 from playwright.sync_api import sync_playwright
-from typing import List, Dict, Optional
+from typing import List, Dict
 import uvicorn
-import os
+import json
 
-app = FastAPI(title="PriceEmpire API", version="1.0.0")
+app = FastAPI(title="🛒 PriceEmpire API", version="2.0")
 
 class PriceResponse(BaseModel):
     success: bool
     data: List[Dict]
     summary: Dict
+    request_url: str
+    pricempire_url: str
     timestamp: str
     execution_time: float
 
-def scrape_prices(url: str) -> List[Dict]:
-    """Core scraper - mesma lógica que funcionou!"""
+def scrape_dynamic(url: str, min_price: float = 50, max_price: float = 2000) -> List[Dict]:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -39,29 +39,27 @@ def scrape_prices(url: str) -> List[Dict]:
         html = page.content()
         browser.close()
         
-        # Extrair preços
         all_prices = re.findall(r'\$([\d,]+\.?\d{2})', html)
         prices_validas = []
         
         for p in all_prices:
             try:
                 preco = float(p.replace(',', ''))
-                if 190 <= preco <= 350:  # Ajuste conforme item
+                if min_price <= preco <= max_price:
                     prices_validas.append(preco)
             except:
                 pass
         
         unique_prices = sorted(list(set(prices_validas)))
         
-        # Marketplaces
         markets = [
             'CSFloat', 'Skinport', 'TradeIt.GG', 'CS.MONEY', 'Skins.com',
             'Lis-skins', 'SkinBaron', 'White.Market', 'SkinOut',
-            'Buff.163', 'Youpin', 'DMarket'
+            'Buff.163', 'Youpin', 'DMarket', 'ShadowPay', 'Bitskins'
         ]
         
         resultado = []
-        for i, preco in enumerate(unique_prices[:12]):
+        for i, preco in enumerate(unique_prices[:15]):
             market = markets[i] if i < len(markets) else f'Market_{i+1}'
             resultado.append({
                 'marketplace': market,
@@ -72,54 +70,59 @@ def scrape_prices(url: str) -> List[Dict]:
         return resultado
 
 @app.get("/api/prices/{item_slug}", response_model=PriceResponse)
-async def get_prices(item_slug: str):
-    """🔥 API PRINCIPAL - Retorna preços por slug"""
+async def get_prices(
+    item_slug: str,
+    min_price: float = Query(50, ge=0),
+    max_price: float = Query(2000, ge=0)
+):
     inicio = time.time()
-    
-    # Monta URL automaticamente
-    base_url = f"https://pricempire.com/cs2-items/{item_slug}"
+    pricempire_url = f"https://pricempire.com/cs2-items/{item_slug}"
+    request_url = f"/api/prices/{item_slug}"
     
     try:
-        print(f"🌐 Scraping: {base_url}")
-        prices = scrape_prices(base_url)
+        prices = scrape_dynamic(pricempire_url, min_price, max_price)
         
         if not prices:
             raise HTTPException(status_code=404, detail="No prices found")
         
-        # Summary
         summary = {
             'total': len(prices),
             'best_price': prices[0]['price_usd'],
-            'average_price': sum(p['price_usd'] for p in prices) / len(prices),
-            'url': base_url
+            'average_price': round(sum(p['price_usd'] for p in prices) / len(prices), 2),
+            'price_range': f"${min_price} - ${max_price}"
         }
         
-        response = PriceResponse(
+        return PriceResponse(
             success=True,
             data=prices,
             summary=summary,
+            request_url=request_url,
+            pricempire_url=pricempire_url,
             timestamp=datetime.now().isoformat(),
             execution_time=round(time.time() - inicio, 2)
         )
         
-        return response
-        
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Scrape failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
-@app.get("/api/prices")
-async def list_examples():
-    """📋 Exemplos de uso"""
-    examples = [
-        "/api/prices/glove/specialist-gloves-foundation/battle-scarred",
-        "/api/prices/glove/sport-gloves-arctic/factory-new",
-        "/api/prices/weapon/ak-47-redline/field-tested"
-    ]
-    return {"examples": examples, "base_url": "https://your-api.render.com"}
+@app.get("/api/examples")
+async def examples():
+    return {
+        "gloves": [
+            "glove/specialist-gloves-foundation/battle-scarred",
+            "glove/sport-gloves-arctic/factory-new"
+        ],
+        "weapons": [
+            "weapon/ak-47-redline/field-tested",
+            "weapon/m4a1-s-cyrex/minimal-wear"
+        ]
+    }
 
 @app.get("/health")
-async def health_check():
-    return {"status": "OK", "service": "PriceEmpire API"}
+async def health():
+    return {"status": "🟢 OK", "api": "PriceEmpire v2.0"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
