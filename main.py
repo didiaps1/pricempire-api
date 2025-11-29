@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
+from playwright.sync_api import sync_playwright
 import re
 import time
-from playwright.sync_api import sync_playwright
 from pydantic import BaseModel
 from typing import List
 import uvicorn
@@ -24,11 +24,10 @@ class PriceResponse(BaseModel):
     summary: PriceSummary
     execution_time: float
 
-PRICE_PATTERN = re.compile(r"\$([\d,]+\.?\d{2})")
 MARKETS = [
-    "CSFloat", "Skinport", "TradeIt.GG", "CS.MONEY", "Skins.com",
-    "Lis-skins", "SkinBaron", "White.Market", "SkinOut",
-    "Buff.163", "Youpin", "DMarket"
+    'CSFloat', 'Skinport', 'TradeIt.GG', 'CS.MONEY', 'Skins.com',
+    'Lis-skins', 'SkinBaron', 'White.Market', 'SkinOut',
+    'Buff.163', 'Youpin', 'DMarket'
 ]
 
 @app.get("/")
@@ -46,41 +45,59 @@ async def get_prices(item_slug: str):
     try:
         url = f"https://pricempire.com/cs2-items/{item_slug}"
         
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True, args=["--no-sandbox"])
-            page = browser.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(10000)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                viewport={'width': 1920, 'height': 1080}
+            )
+            page = context.new_page()
+            
+            # 🔥 ANTI-DETECÇÃO (ESSENCIAL!)
+            page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                window.chrome = {runtime: {}};
+            """)
+            
+            print(f"🌐 Carregando: {url}")
+            page.goto(url, wait_until="domcontentloaded")
+            
+            print("⏳ Aguardando render (10s)...")
+            page.wait_for_timeout(10000)  # 10 SEGUNDOS
+            
+            print("✅ Extraindo preços...")
             html = page.content()
+            
             browser.close()
         
-        # Extrai preços
-        raw_prices = PRICE_PATTERN.findall(html)
-        filtered_prices = []
-        seen = set()
+        # 🔥 REGEX EXATA QUE FUNCIONOU
+        all_prices = re.findall(r'\$([\d,]+\.?\d{2})', html)
+        prices_validas = []
         
-        for raw in raw_prices:
+        for p in all_prices:
             try:
-                price = float(raw.replace(",", ""))
-                if 50 <= price <= 3000 and price not in seen:
-                    seen.add(price)
-                    filtered_prices.append(price)
-            except ValueError:
-                continue
+                preco = float(p.replace(',', ''))
+                # 🔥 FAIXA CORRETA DAS LUVAS!
+                if 190 <= preco <= 350:
+                    prices_validas.append(preco)
+            except:
+                pass
         
-        filtered_prices.sort()
-        filtered_prices = filtered_prices[:15]
+        unique_prices = sorted(list(set(prices_validas)))
+        print(f"💰 {len(unique_prices)} preços encontrados")
         
-        if not filtered_prices:
+        if not unique_prices:
             raise HTTPException(status_code=404, detail="No prices found")
         
+        unique_prices = unique_prices[:12]
+        
         prices = []
-        for idx, price in enumerate(filtered_prices):
-            market = MARKETS[idx % len(MARKETS)]
+        for i, preco in enumerate(unique_prices):
+            market = MARKETS[i]
             prices.append(MarketPrice(
                 marketplace=market,
-                price_usd=round(price, 2),
-                rank=idx + 1
+                price_usd=round(preco, 2),
+                rank=i + 1
             ))
         
         summary = PriceSummary(
@@ -97,6 +114,7 @@ async def get_prices(item_slug: str):
         )
         
     except Exception as e:
+        print(f"💥 ERRO: {e}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 if __name__ == "__main__":
