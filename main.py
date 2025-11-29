@@ -23,10 +23,10 @@ async def health():
 async def get_prices(item_slug: str):
     inicio = time.time()
     url = f"https://pricempire.com/cs2-items/{item_slug}"
-    
+
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
             page = browser.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(10000)
@@ -86,3 +86,4 @@ async def get_prices(item_slug: str):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
